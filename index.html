@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Javascript+Canvas Boomshine clone</title>
+		<script type="text/javascript" src="mt2.js"></script>
+		<script type="text/javascript">
+			var floater;
+			//Levels map, total and goal
+			var levels = [{total:5,goal:1},
+				{total:10,goal:2},
+				{total:15,goal:3},
+				{total:20,goal:5},
+				{total:25,goal:7},
+				{total:30,goal:10},
+				{total:35,goal:15},
+				{total:40,goal:21},
+				{total:45,goal:27},
+				{total:50,goal:33},
+				{total:55,goal:44},
+				{total:60,goal:55}];
+			//Some clean colors to use, prevent muddy looking crap
+			var colors = [ '255,0,0','255,255,0','0,255,0','0,255,255','255,0,255','128,0,0','128,128,0','0,128,0','0,0,128','0,128,128','128,0,128'];
+			//Message displayed on the level play screen
+			var message = {win:false,text:''};
+			//Start at -1
+			var level = -1;
+			//Start at -1, so the initial click blip will set this to 0
+			var explody = -1;
+			var playing = false;
+			//background fading
+			var fading = false;
+			//Running score
+			var score = 0;
+			//Array that holds the blips on the screen
+			var blips = [];
+			//Ghost canvas used to detect if the mouse is over the play button
+			var hitDetect = document.createElement('canvas');
+			//Will hold a reference to the canvas on the page
+			var canvas;
+			var music = true;
+			var prevLevelSeed;
+
+			var buttons;
+
+			var WidgetController = function (ctx) {
+				this.ctx = ctx;
+				this.ghost = document.createElement('canvas').getContext('2d');
+				this.ghost.canvas.width = this.ctx.canvas.width;
+				this.ghost.canvas.height = this.ctx.canvas.height;
+				this.widgets = {};
+				this.count = 0;
+
+				this._mousemove = function(e) {
+					var relativeY = e.pageY - this.ctx.canvas.offsetTop;
+					var relativeX = e.pageX - this.ctx.canvas.offsetLeft;
+					for (var w in this.widgets)
+					{
+						if (!this.widgets[w].visible)
+							continue;
+						if (this.widgets[w].isOver(relativeX,relativeY))
+						{
+							for (var ev in this.widgets[w].events)
+							{
+								if (this.widgets[w].events[ev].type == 'mouseover')
+									this.widgets[w].events[ev].cb.apply(this.widgets[w],[e]);
+							}
+						}
+						else
+						{
+							for (var ev in this.widgets[w].events)
+							{
+								if (this.widgets[w].events[ev].type == 'mouseout')
+									this.widgets[w].events[ev].cb.apply(this.widgets[w],[e]);
+							}
+						}
+					}
+				};
+				this._click = function(e) {
+					var relativeY = e.pageY - this.ctx.canvas.offsetTop;
+					var relativeX = e.pageX - this.ctx.canvas.offsetLeft;
+					for (var w in this.widgets)
+					{
+						//Not sure why this could be undefined...but it does happen...
+						if ((this.widgets[w] == undefined) || (!this.widgets[w].visible))
+							continue;
+						if (this.widgets[w].isOver(relativeX,relativeY))
+						{
+							for (var ev in this.widgets[w].events)
+							{
+								if (this.widgets[w].events[ev].type == 'click')
+								{
+									for (var mo in this.widgets[w].events)
+									{
+										if (this.widgets[w].events[mo].type == 'mouseout')
+											this.widgets[w].events[mo].cb.apply(this.widgets[w],[e]);
+									}
+									this.widgets[w].events[ev].cb.apply(this.widgets[w],[e]);
+								}
+							}
+						}
+					}
+				};
+
+				this.createButton = function (label,x,y,w,h,style) {
+					var b = new this.Button(label,x,y,w,h,style,this);
+					b.draw();
+					return b;
+				};
+
+				this.createImage = function (src,x,y,scale) {
+					var i = new this.Image(src,x,y,scale,this);
+					i.img.onload = function() {
+						i.draw();
+					};
+					i.img.src = i.src;
+					return i;
+				};
+
+				this.Image = function(src,x,y,scale,wc) {
+					this.src = src;
+					this.x = x;
+					this.y = y;
+					this.scale = scale;
+					this.img = new Image();
+					this.visible = true;
+					this.wc = wc;
+					this.wc.widgets['image'+this.wc.count++] = this;
+					this.events = [{type:'mouseover',cb:function(e) { 
+							this.wc.ctx.canvas.style.cursor = 'pointer';
+							var mouseout = function(e) {
+								this.wc.ctx.canvas.style.cursor = 'auto';
+								this.removeEventListener('mouseout',mouseout);
+							}
+							this.addEventListener('mouseout',mouseout,false);
+						}
+					}];
+					this.addEventListener = function(type,callback,bubble) {
+						for (var i in this.events)
+						{
+							if ((this.events[i].type == type) && (this.events[i].cb == callback))
+								return;
+						}
+						this.events.push({type:type,cb:callback});
+					};
+					this.removeEventListener = function(type,callback) {
+						for (var i in this.events)
+						{
+							if ((this.events[i].type == type) && (this.events[i].cb == callback))
+							{
+								delete this.events[i];
+								return;
+							}
+						}
+					};
+					this.draw = function() {
+						var c = this.wc.ctx;
+						c.save();
+						c.scale(this.scale,this.scale);
+						c.clearRect(this.x*(1/this.scale),this.y*(1/this.scale),this.img.width,this.img.height);
+						c.drawImage(this.img,this.x*(1/this.scale),this.y*(1/this.scale));
+						c.restore();
+					};
+					this.isOver = function(x,y) {
+						var c = this.wc.ghost;
+						c.clearRect(0,0,c.canvas.width,c.canvas.height);
+						c.save();
+						c.scale(this.scale,this.scale);
+						try {
+							c.drawImage(this.img,this.x*(1/this.scale),this.y*(1/this.scale));
+						}
+						catch (err) {
+							alert(this.img);
+						}
+						c.restore();
+						var id = c.getImageData(x,y,1,1);
+						var cpd = id.data;
+						if (cpd[0] > 0)
+							return true;
+						if (cpd[1] > 0)
+							return true;
+						if (cpd[2] > 0)
+							return true;
+						return false;
+					};
+				}
+				
+				this.Button = function(label,x,y,w,h,style,wc){
+					this.label = label;
+					this.visible = false;
+					this.x = x;
+					this.y = y;
+					this.w = w;
+					this.h = h;
+					this.style = style;
+					this.wc = wc;
+					this.wc.widgets['button'+this.wc.count++] = this;
+					this.events = [{type:'mouseover',cb:function(e) { 
+							this.wc.ctx.canvas.style.cursor = 'pointer';
+							var mouseout = function(e) {
+								this.wc.ctx.canvas.style.cursor = 'auto';
+								this.removeEventListener('mouseout',mouseout);
+							}
+							this.addEventListener('mouseout',mouseout,false);
+						}
+					}];
+					this.addEventListener = function(type,callback,bubble) {
+						for (var i in this.events)
+						{
+							if ((this.events[i].type == type) && (this.events[i].cb == callback))
+								return;
+						}
+						this.events.push({type:type,cb:callback});
+					};
+					this.removeEventListener = function(type,callback) {
+						for (var i in this.events)
+						{
+							if ((this.events[i].type == type) && (this.events[i].cb == callback))
+							{
+								delete this.events[i];
+								return;
+							}
+						}
+					};
+
+					this.draw = function() {
+						var c = this.wc.ctx;
+						c.save();
+						c.fillStyle = this.style;
+						c.fillRect(this.x,this.y,this.w,this.h);
+						c.font = 'bold 10pt sans-serif';
+						c.fillStyle = 'white';
+						c.fillText(this.label,this.x+(this.w/2),this.y+(this.h/2));
+						c.restore();
+						this.visible = true;
+					}
+
+					this.isOver = function(x,y) {
+						var c = this.wc.ghost;
+						c.clearRect(0,0,c.canvas.width,c.canvas.height);
+						c.beginPath();
+						c.moveTo(this.x,this.y);
+						c.lineTo(this.x+this.w,this.y);
+						c.lineTo(this.x+this.w,this.y+this.h);
+						c.lineTo(this.x,this.y+this.h);
+						c.closePath();
+						return c.isPointInPath(x,y);
+					}
+				}
+
+				var t = this;
+				this.ctx.canvas.addEventListener('mousemove',function (e) { t._mousemove.apply(t,[e]); },false);
+				this.ctx.canvas.addEventListener('click',function (e) { t._click.apply(t,[e]); },false);
+			}
+
+			//Blip object
+			var blip = function() {
+				this.exploding = false;
+				this.alpha = 1;
+				this.speed = 2;
+				this.radius = 8;
+				this.color = window.colors[Math.floor(Math.random()*window.colors.length)];
+				this.maxRadius = 50;
+				this.hold = 20;
+				//Expansion speed multiplier, also controls implosion
+				this.expansion = .75;
+				this.position = new Vector(
+					Math.round(Math.random()*((canvas.width-this.radius)-this.radius))+this.radius,
+					Math.round(Math.random()*((canvas.height-this.radius)-this.radius))+this.radius);
+				
+				var rotation = Math.floor(Math.random()*360) * (Math.PI/180);
+
+				this.velocity = new Vector(
+					this.speed*Math.sin(rotation),
+					this.speed*Math.cos(rotation));
+				//Step is called by the animation interval to move the blip
+				this.step = function() {
+					this.position.add(this.velocity);
+					//if this blip is exploding
+					if (this.exploding)
+					{
+						//Expand it
+						var step = Math.ceil(((this.maxRadius-this.radius)/this.maxRadius)*5)*this.expansion;
+						this.radius += step;
+						//If we've gotten as big as we should get, decrement hold
+						if (this.radius >= this.maxRadius)
+						{
+							this.radius = this.maxRadius;
+							this.hold--;
+						}
+						//If we've finished holding
+						if (this.hold == 0)
+						{
+							//invert the expansion.
+							this.expansion *= -2;
+							//Make sure we don't trigger the max radius check above.
+							this.radius = (this.maxRadius-1);
+							//Prevent THIS check from being triggered
+							this.hold = NaN;
+						}
+						//If we've hit 0 and are done imploding, cycle the array and remove the blip
+						if (this.radius <= 0)
+						{
+							for (var b in window.blips)
+							{
+								if (window.blips[b] == this)
+									window.blips.splice(b,1);
+							}
+						}
+					}
+					else //only bother to check bounce if we're not exploding
+					{
+						//Boomshine Prime allows the circle's center to hit the border.
+						if ((this.position.x > window.canvas.width) || (this.position.x < 0))
+							this.velocity.x *= -1;
+						if ((this.position.y > window.canvas.height) || (this.position.y < 0))
+							this.velocity.y *= -1;
+
+						//check for intersection with any exploding blips
+						for (var blip in window.blips)
+						{
+							if (window.blips[blip] == this)
+								continue;
+							if (window.blips[blip].exploding)
+							{
+								if (this.position.distanceTo(window.blips[blip].position) <= (this.radius+window.blips[blip].radius))
+									this.explode();
+							}
+						}
+					}
+				};
+
+				//Begin exploding
+				this.explode = function() {
+					this.exploding = true;
+					this.velocity = new Vector(0,0);
+					this.alpha = .75;
+					window.explody++;
+					//Fade the background to the lighter color if the player has hit the goal of the level
+					if (window.explody>=window.levels[window.level].goal)
+						fadeBoardBGTo('#618080',500);
+				};
+
+				//Draw this blip
+				this.draw = function(ctx) {
+					ctx.beginPath();
+					ctx.arc(this.position.x,this.position.y,this.radius,0,2*Math.PI,false);
+					ctx.fillStyle = 'rgba('+this.color+','+this.alpha+')';
+					ctx.fill();
+				};
+
+				//Given another blip, calculate the distance to its center, add the radii and see if it hits.
+				this.isThereIntersect = function(b) {
+					return 
+				}
+			};
+
+			//The vector object
+			var Vector = function(x,y) {
+				this.x = x;
+				this.y = y;
+				this.add = function(o) {
+					this.x += o.x;
+					this.y += o.y;
+				};
+				this.distanceTo = function(v) {
+					//Distance between cartesian coordinates
+					return Math.sqrt(Math.pow(v.x-this.x,2)+Math.pow(v.y-this.y,2));
+				};
+			};
+
+			//Setup a level.
+			function startLevel(lvl)
+			{
+				//Reset and create blips
+				window.blips = [];
+				for (var i=0;i<window.levels[lvl].total;i++)
+				{
+					window.blips.push(new blip());
+				}
+			}
+
+			//The main animation interval
+			function draw(ctx)
+			{
+				ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+				ctx.fillStyle = 'white';
+				//True if we have not yet begun exploding the board, or are currently exploding any blips
+				var stillPloding = (window.explody == -1);
+				ctx.save();
+				for (var b in window.blips)
+				{
+					window.blips[b].step();
+					//Step may have destroyed this blip.
+					if (window.blips[b])
+					{
+						if (window.blips[b].exploding == true)
+							stillPloding = true;
+						window.blips[b].draw(ctx);
+					}
+				}
+				drawFloater(ctx);
+				ctx.restore();
+				//Draws the score in the lower left
+				drawScore(ctx);
+				//If we are not still exploding, or have not yet begun, end the level
+				if (!stillPloding)
+				{
+					//True is a winning condition
+					endLevel(window.explody >= window.levels[window.level].goal);
+				}
+			}
+
+			function drawFloater(ctx)
+			{
+				//dssd
+				ctx.beginPath();
+				ctx.arc(window.floater.x,window.floater.y,10,0,2*Math.PI,false);
+				ctx.strokeStyle = 'white';//'rgba(255,255,255,1)';
+				ctx.shadowColor = 'white';
+				ctx.lineWidth = 2;
+				ctx.shadowBlur = 10.0;
+				ctx.globalAlpha = .5;
+				ctx.stroke();
+				ctx.closePath();
+			};
+
+			//Running score drawing function
+			function drawScore(ctx)
+			{
+				ctx.fillStyle = 'white';
+				ctx.font = 'bold 15pt sans-serif';
+				ctx.textAlign = 'left';
+				ctx.fillText('Points: '+((window.explody==-1) ? 0 : window.explody)+'/'+window.levels[window.level].goal+' from '+window.levels[window.level].total,
+				2,ctx.canvas.height-10);
+			}
+
+			//Ends the level, clears the animation interval, fade back to the dark background, and display the level play screen
+			function endLevel(win)
+			{
+				clearInterval(window.timer);
+				window.message.win = win;
+				if (win)
+				{
+					window.message.text = 'Good job! You got '+window.explody+'/'+window.levels[window.level].goal;
+					window.level++;
+					window.score += window.explody;
+					if (!window.levels[window.level])
+					{
+						window.message.text = '';
+						drawEndGameScreen(document.getElementById('c1').getContext('2d'));
+						return;
+					}
+				}
+				else
+				{
+					window.message.text = 'You failed to meet the goal. You only got '+window.explody+' of '+window.levels[window.level].goal;
+					if (window.explody+1 == window.levels[window.level].goal)
+					{
+						window.message.win = true;
+						window.message.text = 'So close! Just one away!';
+					}
+				}
+				startLevel(window.level);
+				window.playing = false;
+				window.explody = -1;
+
+				//fade the background
+				fadeBoardBGTo('#003333',500,function () {
+					drawLevelScreen(document.getElementById('c1').getContext('2d'));
+				});
+			}
+
+			function drawEndGameScreen(ctx)
+			{
+				ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+				//Title.
+				ctx.font = '25pt sans-serif';
+				ctx.fillStyle = '#0099FF';
+				ctx.textAlign = 'center';
+				ctx.fillText('Final score: '+window.score,ctx.canvas.width/2,100);
+				ctx.font = '10pt sans-serif';
+				//TODO: Ranges?
+				ctx.fillText('Good',ctx.canvas.width/2,150);
+
+				var replayBtn = window.buttons.createButton('Play again?',(ctx.canvas.width-130)/2,200,130,60,'#004C19')
+				replayBtn.addEventListener('click',reloadGame,false);
+
+				var submitBtn = window.buttons.createButton('Submit Score?',ctx.canvas.width/2-135,270,130,60,'#004C19')
+				submitBtn.addEventListener('click',submitScore,false);
+
+				var viewBtn = window.buttons.createButton('View Scores',ctx.canvas.width/2+5,270,130,60,'#004C19')
+				viewBtn.addEventListener('click',goToHighScores,false);
+				fadeBoardBGTo('#003333',500);
+			}
+			function goToHighScores()
+			{
+			}
+			function submitScore()
+			{
+			}
+			function reloadGame()
+			{
+				window.level = 0;
+				startLevel(window.level);
+				window.playing = false;
+				window.explody = -1;
+				drawLevelScreen(window.canvas.getContext('2d'));
+			}
+			
+			function fadeBoardBGTo(color,duration,callback)
+			{
+				if (window.fading)
+					return;
+				window.fading = true;
+				if (color.charAt(0) == '#')
+					color = color.substring(1,color.length);
+				var trgb = [parseInt(color.substring(0,2),16),
+					parseInt(color.substring(2,4),16),
+					parseInt(color.substring(4,6),16)];
+				var ccolor = window.canvas.style.backgroundColor;
+				var crgb;
+				if (ccolor.charAt(0) == '#')
+				{
+					ccolor = ccolor.substring(1,ccolor.length);
+					crgb = [parseInt(ccolor.substring(0,2),16),
+					parseInt(ccolor.substring(2,4),16),
+					parseInt(ccolor.substring(4,6),16)];
+				}
+				else
+				{
+					ccolor = ccolor.substring(4,ccolor.length-1);
+					crgb = ccolor.split(',');
+				}
+				for (var i in crgb)
+				{
+					crgb[i] = parseInt(crgb[i]);
+				}
+				
+				var intervals = duration/40;
+				var diffrgb = [trgb[0]-crgb[0],trgb[1]-crgb[1],trgb[2]-crgb[2]];
+				var steprgb = [diffrgb[0]/intervals,diffrgb[2]/intervals,diffrgb[2]/intervals];
+
+				setTimeout(_stepBoardBG,40,crgb,steprgb,trgb,callback);
+			}
+			function _stepBoardBG(curr,step,target,callback)
+			{
+				for (var i in curr)
+				{
+					curr[i] += parseFloat(step[i]);
+					curr[i] = Math.round(curr[i]);
+					if (curr[i]>255)
+						curr[i] = 255;
+					if (curr[i]<0)
+						curr[i] = 0;
+					if (step[i] > 0)
+					{
+						if (curr[i] > target[i])
+							curr[i] = target[i];
+					}
+					else
+					{
+						if (curr[i] < target[i])
+							curr[i] = target[i];
+					}
+				}
+
+				window.canvas.style.backgroundColor = 'rgb('+curr.join(',')+')';
+
+				if (arrayEquals(curr,target))
+				{
+					window.fading = false;
+					if (callback)
+						callback();
+				}
+				else
+					setTimeout(_stepBoardBG,40,curr,step,target,callback);
+			}
+			function arrayEquals(a,b)
+			{
+				if (a.length != b.length)
+					return false;
+				for (var i in a)
+				{
+					if (a[i] != b[i])
+						return false;
+				}
+				return true;
+			}
+
+			//Draws the intro splash
+			function drawIntro(ctx)
+			{
+				ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+				//Title.
+				ctx.font = '25pt sans-serif'; ctx.fillStyle = '#0099FF';
+				ctx.textAlign = 'end';
+				ctx.fillText('Boom',ctx.canvas.width/2,100);
+				ctx.fillStyle = '#FEFF01';
+				ctx.textAlign = 'start';
+				ctx.fillText('shine',ctx.canvas.width/2,100);
+				ctx.textAlign = 'center';
+				ctx.font = '8pt sans-serif';
+				ctx.fillStyle = 'white';
+				ctx.fillText('Ported (with permission) to HTML5 by: Phil Andrews',ctx.canvas.width/2,120);
+				ctx.font = '16pt sans-serif';
+				ctx.fillText('by Danny Miller',ctx.canvas.width/2,150);
+				ctx.font = '20pt sans-serif';
+				ctx.fillText('www.K2xL.com',ctx.canvas.width/2,220);
+				ctx.font = '10pt sans-serif';
+				//TODO at some point, I will have music
+				ctx.fillText('music by Tim Halbert (www.timhalbert.com)',ctx.canvas.width/2,280);
+				var playBtn = window.buttons.createButton('Play',(window.canvas.width-130)/2,300,130,60,'#004C19');
+				playBtn.addEventListener('click',function() {
+							window.level++;
+							startLevel(window.level);
+							drawLevelScreen(window.canvas.getContext('2d'));
+				},false);
+
+				var musicToggle = window.buttons.createImage('speaker-icon.png',window.canvas.width-40,300,.05);
+				musicToggle.addEventListener('click',toggleMusic,false);
+			}
+			function toggleMusic() {
+				window.music = !window.music;
+				this.img.src = (window.music) ? 'speaker-icon.png' : 'speaker-mute.png';
+				if (!window.music)
+				{
+					document.getElementById('bgMusic').currentTime = 0;
+					document.getElementById('bgMusic').pause();
+				}
+			}
+
+			//Level Play Screen
+			function drawLevelScreen(ctx)
+			{
+				ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+				window.buttons.widgets = {};
+				window.buttons.count = 0;
+				ctx.font = '18pt sans-serif';
+				ctx.fillStyle = (window.message.win) ? '#00FF00' : 'red';
+				ctx.textAlign = 'center';
+				ctx.fillText(window.message.text,ctx.canvas.width/2,50);
+				ctx.fillStyle = '#0099FF';
+				ctx.font = 'bold 25pt sans-serif';
+				ctx.fillText('Directions',ctx.canvas.width/2,110);
+				ctx.fillStyle = 'white';
+				ctx.font = '20pt sans-serif';
+				ctx.fillText('Level '+(window.level+1)+': Goal: '+window.levels[window.level].goal+' out of '+window.levels[window.level].total,ctx.canvas.width/2,180);
+				ctx.fillText('Current Score: '+window.score,ctx.canvas.width/2,300);
+				var playBtn = window.buttons.createButton('Play',(window.canvas.width-130)/2,200,130,60,'#004C19');
+				playBtn.addEventListener('click',function(e) {
+					window.timer = setInterval(draw,40,window.canvas.getContext('2d'));
+					window.buttons.widgets = {};
+					window.buttons.count = 0;
+					setTimeout(function() { window.playing = true; },80);
+					if (window.music)
+						playMusic();
+				},false);
+				if (window.music)
+					playMusic();
+				var musicToggle = window.buttons.createImage((window.music) ? 'speaker-icon.png' : 'speaker-mute.png',window.canvas.width-40,300,.05);
+				musicToggle.addEventListener('click',toggleMusic,false);
+			}
+
+			function playMusic()
+			{
+				if (document.getElementById('bgMusic').paused)
+				{
+					document.getElementById('bgMusic').currentTime = 0;
+					document.getElementById('bgMusic').play();
+				}
+			}
+
+			//Setup the game when the DOM is ready
+			window.onload = function () {
+				window.buttons = new WidgetController(document.getElementById('c1').getContext('2d'));
+				window.floater = new Vector(0,0);
+				window.canvas = document.getElementById('c1');
+				window.hitDetect.width = canvas.width;
+				window.hitDetect.height = canvas.height;
+				//Board clicks, or play button clicks
+				window.canvas.addEventListener('click',function(e) {
+					if ((window.playing) && (window.explody == -1))
+					{
+						var relativeY = e.pageY - window.canvas.offsetTop;
+						var relativeX = e.pageX - window.canvas.offsetLeft;
+						var b = new blip();
+						b.position = new Vector(relativeX,relativeY);
+						b.explode();
+						b.color = '255,255,255';
+						window.blips.push(b);
+					}
+				},false);
+				window.canvas.addEventListener('mousemove',function(e) {
+						window.floater.y = e.pageY - window.canvas.offsetTop;
+						window.floater.x = e.pageX - window.canvas.offsetLeft;
+				},false);
+				var ctx = document.getElementById('c1').getContext('2d')
+				
+				drawIntro(ctx);
+				var auds = document.getElementsByTagName('audio');
+				for (var a = 0;a<auds.length;a++)
+				{
+					var au = auds.item(a);
+					if (au.className == 'loop')
+					{
+						au.addEventListener('ended',function() {
+							au.currentTime = 0;
+						},false);
+					}
+				}
+			};
+		</script>
+	</head>
+	<body>
+		<canvas style="background:#003333" id="c1" width="550" height="400">Your browser does not support the canvas element.  You should upgrade to a more modern browser.</canvas>
+		<audio id="bgMusic" class="loop" src="Tim Halbert - Boomshine.ogg" preload="none"></audio>
+	</body>
+</html>
